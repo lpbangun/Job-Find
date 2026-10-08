@@ -1,8 +1,14 @@
-# Bounded job sourcing POC
+# Job Find
 
 An executable **stdlib Python runtime plus an agent skill**, independent of any job index, profile manager, model provider or application tool. The existing host interprets natural language and evidence; the runtime owns durable runs, atomic aggregate request limits, safe public fetching, exact evidence checks, canonical identity and ranked outputs. No custom agent harness or MCP implementation.
 
 `BRIEF.md` is the preserved historical staging brief. The authorized implementation lives in `SKILL.md`, `references/`, `scripts/sourcing.py` and `tests/`.
+
+## Current status
+
+Experimental, not a production-ready job matcher. The runtime passes 31 offline tests and independent adversarial checks, but the latest bounded live evaluation returned zero fully qualified matches across 11 requested jobs. Structured extraction and durable candidate saving work; JavaScript-only responses, missing eligibility/pay evidence and host interpretation remain limitations. Private benchmark inputs and operational evidence are not included.
+
+Job Find is standalone. Future JobSSS integration is intended, not implemented: keep broader discovery here and use JobSSS for selected-job/application workflow. No automated applications or outreach.
 
 ## Run
 
