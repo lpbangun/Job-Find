@@ -31,3 +31,36 @@ class ExtractionTests(unittest.TestCase):
     def test_numeric_claim_must_match_quote(self):
         with self.assertRaises(ModelError):
             apply_facts(self.job, {"job_id": self.job.identity, "facts": {"salary_min": {"value": 600000, "quote": "$60,000"}}})
+
+    def test_known_scalar_conflict_is_atomic(self):
+        self.job.arrangement = "onsite"
+        with self.assertRaisesRegex(ModelError, "Source fact conflict"):
+            apply_facts(self.job, {"job_id": self.job.identity, "facts": {
+                "salary_min": {"value": 60000, "quote": "$60,000"},
+                "arrangement": {"value": "remote", "quote": "Remote"}}})
+        self.assertEqual(self.job.arrangement, "onsite")
+        self.assertIsNone(self.job.salary_min)
+        self.assertEqual(self.job.evidence, [])
+
+    def test_country_scope_cannot_expand_or_shrink(self):
+        self.job.countries = ["GB"]
+        for values in (["GB", "US"], ["US"], []):
+            with self.assertRaisesRegex(ModelError, "Source fact conflict"):
+                apply_facts(self.job, {"job_id": self.job.identity, "facts": {
+                    "countries": {"value": values, "quote": "US"}}})
+        self.assertEqual(self.job.countries, ["GB"])
+
+    def test_required_skills_cannot_remove_known_requirement(self):
+        self.job.required_skills = ["SQL"]
+        with self.assertRaisesRegex(ModelError, "Source fact conflict"):
+            apply_facts(self.job, {"job_id": self.job.identity, "facts": {
+                "required_skills": {"value": [], "quote": "Remote"}}})
+        apply_facts(self.job, {"job_id": self.job.identity, "facts": {
+            "required_skills": {"value": ["SQL", "Python"], "quote": "Remote"}}})
+        self.assertEqual(self.job.required_skills, ["SQL", "Python"])
+
+    def test_zero_known_fact_is_not_missing(self):
+        self.job.experience_min = 0
+        with self.assertRaisesRegex(ModelError, "Source fact conflict"):
+            apply_facts(self.job, {"job_id": self.job.identity, "facts": {
+                "experience_min": {"value": 60000, "quote": "$60,000"}}})

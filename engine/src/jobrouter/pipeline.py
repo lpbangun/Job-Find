@@ -82,6 +82,9 @@ def run_search(prompt, profile, seeds, router, fetcher, store=None, candidate_li
             try:
                 job, decision, verification = future.result()
                 row = {"job": job.to_dict(), "decision": decision.to_dict(), "verification": verification}
+                if verification and verification.get("status") == "unverified":
+                    result.errors.append({"job_id": job.identity, "stage": "verify_application",
+                                          "error": verification.get("reason", "Application path remains unverified")})
                 getattr(result, decision.category).append(row)
                 if store:
                     store.job(job)

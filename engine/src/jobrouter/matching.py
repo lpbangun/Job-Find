@@ -1,6 +1,7 @@
 """Conservative deterministic screening; semantic relevance needs independent review."""
 import re
 import math
+import hashlib
 from datetime import datetime, timezone, timedelta
 from .models import Brief, Job, Check, Decision, Verdict
 from .verification import POOLS
@@ -97,8 +98,10 @@ def apply_review(decision: Decision, job: Job, review: dict, brief: Brief) -> De
     """Host model judgments are bound to the job, brief and source; hard failures cannot be overridden."""
     if review.get("job_id") != job.identity or review.get("brief_digest") != brief.digest:
         raise ValueError("Review is bound to another job or brief")
-    if review.get("source_digest") not in {e.digest for e in job.evidence}:
-        raise ValueError("Review references an unknown source snapshot")
+    description_digest = hashlib.sha256(job.description.encode()).hexdigest()
+    if (review.get("source_digest") != description_digest or
+            not any(e.field == "description" and e.digest == description_digest for e in job.evidence)):
+        raise ValueError("Review must reference the current description snapshot")
     if not review.get("model") or not isinstance(review.get("relevant"), bool):
         raise ValueError("Actual model identity and relevance judgment required")
     quotes = review.get("quotes", [])

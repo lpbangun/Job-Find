@@ -55,6 +55,21 @@ class MatchingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply_review(decision, candidate, review, brief)
 
+    def test_review_requires_current_description_digest(self):
+        candidate = job()
+        brief = Brief("Learning")
+        form = Evidence.from_text(candidate.url, "<form>Apply</form>", "Apply", "application_form")
+        candidate.evidence.append(form)
+        review = dict(job_id=candidate.identity, brief_digest=brief.digest,
+                      source_digest=form.digest, model="test-reviewer", relevant=True,
+                      quotes=["Design learning"], score=90)
+        with self.assertRaisesRegex(ValueError, "current description"):
+            apply_review(screen(candidate, brief), candidate, review, brief)
+        review["source_digest"] = candidate.evidence[0].digest
+        candidate.description = "Changed description: Design learning"
+        with self.assertRaisesRegex(ValueError, "current description"):
+            apply_review(screen(candidate, brief), candidate, review, brief)
+
     def test_review_brief_binding(self):
         candidate = job(availability="open")
         brief = Brief("Learning")

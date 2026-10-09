@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from jobrouter.models import Brief, now
 from jobrouter.pipeline import run_search
 from jobrouter.routing import ModelRouter
@@ -32,7 +33,44 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result.status, "sufficient_verified_results")
         self.assertEqual(len(result.qualified), 1)
         self.assertEqual(result.coverage["model_calls"], 2)
+        with patch("jobrouter.pipeline.verify_application", return_value={"status": "unverified", "reason": "No application form"}):
+            blocked = run_search(brief.prompt, None, ["https://job-boards.greenhouse.io/test"],
+                                 ModelRouter(callback=model), PublicFetcher(wire=wire, per_origin_delay=0), compiled_brief=brief)
+        self.assertFalse(blocked.qualified)
+        self.assertEqual(blocked.stages[-1]["status"], "completed_with_gaps")
+        self.assertEqual(blocked.errors[0]["stage"], "verify_application")
+        for failed_stage in ("extractor", "reviewer"):
+            def broken_model(request):
+                if request["task"] == failed_stage:
+                    raise RuntimeError("fixture model failure")
+                return model(request)
+            failed = run_search(brief.prompt, None, ["https://job-boards.greenhouse.io/test"],
+                                ModelRouter(callback=broken_model), PublicFetcher(wire=wire, per_origin_delay=0), compiled_brief=brief)
+            self.assertFalse(failed.qualified)
+            self.assertEqual(failed.stages[-1]["status"], "completed_with_gaps")
+
+
 
     def test_mismatched_compiled_profile_is_rejected(self):
         with self.assertRaises(ValueError):
             run_search("Find jobs", None, [], ModelRouter(), PublicFetcher(), compiled_brief=Brief("Other prompt"))
+
+    def test_ats_hard_fact_cannot_be_overwritten_into_qualified(self):
+        def wire(url):
+            body = "" if url.endswith("robots.txt") else json.dumps({"jobs": [{
+                "id": 1, "title": "Learning Designer", "workplaceType": "onsite",
+                "absolute_url": "https://job-boards.greenhouse.io/test/jobs/1",
+                "content": "Train remote customers."}]})
+            return Response(url, 200, {}, body.encode(), now())
+        def model(request):
+            self.assertEqual(request["task"], "extractor")
+            return {"actual_model": "fixture-model-not-live", "output": {
+                "job_id": request["payload"]["job_id"], "facts": {
+                    "arrangement": {"value": "remote", "quote": "remote customers"}}}}
+        brief = Brief("Find remote learning jobs", role_families=["learning"], arrangements=["remote"], count=1)
+        result = run_search(brief.prompt, None, ["https://job-boards.greenhouse.io/test"],
+                            ModelRouter(callback=model), PublicFetcher(wire=wire, per_origin_delay=0), compiled_brief=brief)
+        self.assertFalse(result.qualified)
+        self.assertEqual(result.excluded[0]["job"]["arrangement"], "onsite")
+        self.assertIn("Source fact conflict", result.errors[0]["error"])
+        self.assertEqual(result.stages[-1]["status"], "completed_with_gaps")

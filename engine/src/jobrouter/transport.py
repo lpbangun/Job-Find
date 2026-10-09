@@ -4,6 +4,9 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import math
+from pathlib import Path
+import tempfile
 import socket
 import ssl
 import threading
@@ -57,6 +60,43 @@ def resolve_public(hostname, timeout):
         parent.close()
 
 
+def _proxy_request_worker(directory, url, user_agent, timeout, max_bytes):
+    """Spawn-safe worker: all potentially trickling network reads stay here."""
+    directory = Path(directory)
+    try:
+        opener = build_opener(NoRedirect())
+        request = Request(url, headers={"User-Agent": user_agent, "Accept-Encoding": "identity"})
+        try:
+            result = opener.open(request, timeout=timeout)
+        except HTTPError as exc:
+            result = exc
+        with result:
+            body = result.read(max_bytes + 1)
+            if len(body) > max_bytes:
+                raise FetchError("Response exceeds byte limit")
+            metadata = {"status": result.code,
+                        "headers": {k.lower(): v for k, v in result.headers.items()},
+                        "observed_at": now()}
+            (directory / "body").write_bytes(body)
+    except Exception as exc:
+        metadata = {"error": str(exc)[:4096]}
+    (directory / "result.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+
+def _reap_proxy_worker(process):
+    # Network workers create no descendants. Bound the graceful stop before kill.
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=0.2)
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=1)
+    if process.is_alive():
+        raise FetchError("Managed proxy worker could not be reaped")
+    process.join(timeout=0)
+    process.close()
+
+
 def canonical_url(url):
     if not isinstance(url, str) or any(ord(c) < 33 for c in url) or "\\" in url:
         raise ValueError("Unsafe URL")
@@ -96,7 +136,8 @@ class Response:
 
 class PublicFetcher:
     def __init__(self, budget=200, per_origin_delay=0.5, timeout=20, max_bytes=3_000_000, wire=None, trusted_proxy_hosts=()):
-        if budget < 1 or timeout <= 0 or max_bytes < 1 or per_origin_delay < 0:
+        if (budget < 1 or isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                or not math.isfinite(timeout) or timeout <= 0 or max_bytes < 1 or per_origin_delay < 0):
             raise ValueError("Invalid fetch limits")
         self.budget = budget
         self.delay = per_origin_delay
@@ -119,17 +160,53 @@ class PublicFetcher:
     def _proxy_wire(self, url):
         if urlsplit(url).hostname not in self.trusted_proxy_hosts or not getproxies().get("https"):
             raise FetchError("Host is not approved for the managed egress proxy")
-        opener = build_opener(NoRedirect())
-        request = Request(url, headers={"User-Agent": self.user_agent, "Accept-Encoding": "identity"})
-        try:
-            result = opener.open(request, timeout=self.timeout)
-        except HTTPError as exc:
-            result = exc
-        with result:
-            body = result.read(self.max_bytes + 1)
-            if len(body) > self.max_bytes:
-                raise FetchError("Response exceeds byte limit")
-            return Response(url, result.code, dict((k.lower(), v) for k, v in result.headers.items()), body, now())
+        deadline = time.monotonic() + self.timeout
+
+        def remaining():
+            value = deadline - time.monotonic()
+            if value <= 0:
+                raise FetchError("Managed proxy fetch deadline exceeded")
+            return value
+
+        # A pipe poll only promises some bytes, not a complete message. Wait for
+        # worker exit instead, then read bounded files in a private local directory.
+        with tempfile.TemporaryDirectory(prefix="jobrouter-proxy-") as directory:
+            context = multiprocessing.get_context("spawn")
+            process = context.Process(target=_proxy_request_worker,
+                                      args=(directory, url, self.user_agent, self.timeout, self.max_bytes),
+                                      daemon=True)
+            try:
+                remaining()
+                process.start()
+                process.join(timeout=remaining())
+                if process.is_alive():
+                    raise FetchError("Managed proxy fetch deadline exceeded")
+                remaining()
+                if process.exitcode != 0:
+                    raise FetchError("Managed proxy worker failed")
+                try:
+                    with open(Path(directory) / "result.json", "rb") as source:
+                        raw_metadata = source.read(8_000_001)
+                    if len(raw_metadata) > 8_000_000:
+                        raise FetchError("Managed proxy metadata exceeds byte limit")
+                    metadata = json.loads(raw_metadata)
+                    remaining()
+                    if "error" in metadata:
+                        raise FetchError(metadata["error"])
+                    with open(Path(directory) / "body", "rb") as source:
+                        body = source.read(self.max_bytes + 1)
+                    if len(body) > self.max_bytes:
+                        raise FetchError("Response exceeds byte limit")
+                    response = Response(url, metadata["status"], metadata["headers"], body, metadata["observed_at"])
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    raise FetchError("Invalid managed proxy worker result") from exc
+                remaining()
+                return response
+            finally:
+                if process.pid is not None:
+                    _reap_proxy_worker(process)
+                else:
+                    process.close()
 
     def _wire(self, url):
         p = urlsplit(url)
@@ -190,6 +267,8 @@ class PublicFetcher:
                 self.used += 1
                 sequence = self.used
             start = now()
+            receipt = {"sequence": sequence, "url": url, "started_at": start,
+                       "error": "Request interrupted before completion"}
             try:
                 response = self.wire(url)
                 if response.status in (401, 403, 429):

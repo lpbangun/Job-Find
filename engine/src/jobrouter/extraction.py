@@ -43,6 +43,17 @@ def apply_facts(job, output):
             raise ModelError(f"Invalid fact list: {field}")
         if field in ("currency", "sector") and (not isinstance(value, str) or not value.strip()):
             raise ModelError(f"Invalid string fact: {field}")
+        existing = getattr(job, field)
+        # Model extraction may fill missing facts, but cannot silently reconcile
+        # contradictions with the retrieved ATS row or an earlier bound fact.
+        if isinstance(existing, list) and existing:
+            old = {x.casefold() for x in existing}
+            new = {x.casefold() for x in value}
+            conflict = old != new if field == "countries" else not old.issubset(new)
+        else:
+            conflict = existing is not None and existing != "unknown" and existing != [] and existing != value
+        if conflict:
+            raise ModelError(f"Source fact conflict requires review: {field} (existing={existing!r}, extracted={value!r})")
         pending.append((field, value, quote))
     values = {field: value for field, value, quote in pending}
     for lo, hi in (("salary_min", "salary_max"), ("hours_min", "hours_max")):
