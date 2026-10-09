@@ -23,6 +23,53 @@ def norm(s):
     return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
 
 
+
+# Planner outputs are natural language, not an enum. Normalize common family
+# names before expanding retrieval aliases; this never establishes relevance.
+FAMILY_NAMES = {
+    "engineering": {"software engineering", "software development", "backend software engineering",
+                    "backend engineering", "frontend engineering", "front end engineering",
+                    "full stack engineering", "fullstack engineering", "backend development",
+                    "frontend development", "full stack development"},
+    "learning": {"instructional design", "learning design", "learning and development", "education and training"},
+    "people": {"human resources", "people operations", "hr"},
+    "recruiting": {"recruitment", "talent acquisition", "technical recruiting"},
+    "implementation": {"customer implementation", "customer onboarding", "software implementation"},
+    "operations": {"business operations", "business strategy", "strategy and operations"},
+    "design": {"product design", "ux design", "user experience design", "visual design"},
+    "sales": {"business development", "sales development", "account sales"},
+}
+
+
+def retrieval_norm(value):
+    value = norm(value)
+    for source, target in (("front end", "frontend"), ("back end", "backend"), ("fullstack", "full stack")):
+        value = re.sub(r"\b" + source + r"\b", target, value)
+    return value
+
+
+def title_match(term, title):
+    # Short aliases are tokens, not fragments (ux must not match luxury).
+    if len(term) <= 3:
+        return re.search(r"\b" + re.escape(term) + r"\b", title) is not None
+    return term in title
+
+
+def retrieval_terms(families):
+    terms = []
+    for family in families:
+        name = retrieval_norm(family)
+        canonical = next((key for key, aliases in FAMILY_NAMES.items()
+                          if name == key or name in aliases), None)
+        # Exact aliases are also valid family labels. Unknown domains remain
+        # literal, rather than being coerced into an unrelated known family.
+        if canonical is None:
+            canonical = next((key for key, aliases in FAMILIES.items()
+                              if name in {norm(alias) for alias in aliases}), None)
+        terms.extend(FAMILIES[canonical] if canonical else [name])
+    return list(dict.fromkeys(terms))
+
+
 def screen(job: Job, brief: Brief) -> Decision:
     brief.validate()
     checks = []
@@ -82,11 +129,28 @@ def screen(job: Job, brief: Brief) -> Decision:
     for requirement in brief.requirements:
         add("requirement:" + requirement["id"], None, requirement["description"])
 
-    title = norm(job.title)
-    terms = [term for family in brief.role_families for term in FAMILIES.get(family, [family])]
-    hits = [term for term in terms if norm(term) in title]
+    title = retrieval_norm(job.title)
+    terms = retrieval_terms(brief.role_families)
+    hits = [term for term in terms if title_match(retrieval_norm(term), title)]
     # Candidate retrieval score is never sufficient to assert semantic fit.
     score = min(70.0, len(hits) * 20.0) if terms else 20.0
+    engineering_families = [retrieval_norm(family) for family in brief.role_families
+                            if retrieval_terms([family]) == FAMILIES["engineering"]]
+    specialties = [specialty for specialty in ("backend", "frontend", "full stack")
+                   if any(re.search(r"\b" + specialty + r"\b", family)
+                          for family in engineering_families)]
+    if specialties:
+        # Keep broad discovery, but preserve an explicitly named specialty's
+        # priority before the candidate budget truncates the list.
+        specialty_hit = any(re.search(r"\b" + specialty + r"\b", title) for specialty in specialties)
+        engineering_score = min(70, sum(title_match(retrieval_norm(term), title)
+                                       for term in FAMILIES["engineering"]) * 20)
+        engineering_score = 40 + min(30, engineering_score) if specialty_hit else min(30, engineering_score)
+        other_families = [family for family in brief.role_families
+                          if retrieval_terms([family]) != FAMILIES["engineering"]]
+        other_score = min(70, sum(title_match(retrieval_norm(term), title)
+                                 for term in retrieval_terms(other_families)) * 20)
+        score = max(engineering_score, other_score)
     reasons = [f"Title retrieval match: {x}" for x in hits]
     if not hits and terms:
         reasons.append("No title-alias match; retain for semantic review rather than automatically exclude")

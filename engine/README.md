@@ -4,11 +4,11 @@ Work in progress, built separately from Jobsss. This is an evidence-first Python
 
 ## Current status (2026-10-09)
 
-- 87 offline regression tests pass, including a fixture-driven complete mission.
+- 100 offline regression tests pass, including a fixture-driven complete mission.
 - Live collection exercised Greenhouse (18 VTS), Lever (39 360Learning) and Workable (6 Hugging Face) using a managed egress proxy. These 63 listings are collection evidence, not 63 relevant recommendations.
 - Two VTS application schemas were checked live, read-only. They are not fresh recommendations for the original user.
 - Ashby API verification stopped at an HTTP 401 robots response; it was not bypassed. Recruitee remains fixture-only.
-- No real host-model run, held-out relevance score, commercial/security review or production readiness claim yet.
+- Three development-only live missions used genuine host-callback model judgments (33 calls total); served-model identity was unavailable and explicitly recorded as unknown. They produced zero fully qualified results. See `docs/DEVELOPMENT-SMOKE.md`. No held-out relevance score, commercial/security review or production readiness claim yet.
 - The 90% genuine-relevance release gate has NOT been met. See `docs/ACCEPTANCE.md`.
 
 ## Run
@@ -29,7 +29,7 @@ The hosting agent/runtime supplies `ModelRouter(callback=...)` or an explicitly 
 
 ## Source access
 
-Public HTTPS only. Per-origin pacing, request-attempt budget, bounded response size, no automatic retries, robots policy and explicit access/rate-limit stops. Direct transport pins a validated public DNS address while preserving TLS hostname verification. In managed environments with a trusted egress proxy, exact public hostnames must be explicitly allowlisted by deployment configuration; scraped content cannot expand that list.
+Public HTTPS only. Per-origin pacing, request-attempt budget, bounded response size, no automatic retries, robots policy and explicit access/rate-limit stops. Direct transport pins a validated public DNS address while preserving TLS hostname verification. Both direct and proxy wire requests run in isolated processes with a parent deadline covering DNS (direct), connection, headers, body and result handoff; process startup and cleanup can add overhead. Host programs using the Python API must follow Python multiprocessing spawn requirements (an importable entry point with a guarded main). In managed environments with a trusted egress proxy, exact public hostnames must be explicitly allowlisted by deployment configuration; scraped content cannot expand that list.
 
 The frontier follows career/ATS/directory leads from input seeds, including career-labelled links whose URL paths are opaque, with configurable depth and source budgets. It does not yet implement exhaustive web discovery or an unrestricted global search service. Model-assisted frontier expansion, additional adapters and independent coverage evaluation are still in progress.
 

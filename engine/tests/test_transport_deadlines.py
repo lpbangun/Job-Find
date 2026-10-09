@@ -127,7 +127,7 @@ class ProxyDeadlineTests(unittest.TestCase):
         for mode in ("open-slow", "headers-slow", "body-slow", "handoff-slow", "kill"):
             directories, pids, ready = [], [], []
             real_temporary = tempfile.TemporaryDirectory
-            real_reap = transport._reap_proxy_worker
+            real_reap = transport._reap_request_worker
 
             def temporary(*args, **kwargs):
                 result = real_temporary(*args, **kwargs)
@@ -141,7 +141,7 @@ class ProxyDeadlineTests(unittest.TestCase):
 
             fetcher = self.fetcher(timeout=0.5, max_bytes=100)
             started = time.monotonic()
-            with self.subTest(mode=mode), patch.object(transport.tempfile, "TemporaryDirectory", temporary), patch.object(transport, "_reap_proxy_worker", reap):
+            with self.subTest(mode=mode), patch.object(transport.tempfile, "TemporaryDirectory", temporary), patch.object(transport, "_reap_request_worker", reap):
                 with self.assertRaisesRegex(FetchError, "deadline exceeded"):
                     fetcher._one(f"https://jobs.example/{mode}")
                 self.assertLess(time.monotonic() - started, 3)

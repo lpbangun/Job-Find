@@ -28,36 +28,43 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def _resolve_worker(pipe, hostname):
+def resolve_public(hostname):
+    # Called only inside the bounded request worker: DNS consumes its deadline.
+    addresses = list(dict.fromkeys(x[4][0] for x in socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)))
+    if not addresses or any(not ipaddress.ip_address(x).is_global for x in addresses):
+        raise FetchError("Non-public DNS answer")
+    return addresses[0]
+
+
+def _direct_request_worker(directory, url, user_agent, timeout, max_bytes):
+    """DNS, TLS and all HTTP framing run inside one parent-bounded process."""
+    directory = Path(directory)
+    conn = raw = None
     try:
-        pipe.send({"addresses": list(dict.fromkeys(x[4][0] for x in socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)))})
+        p = urlsplit(url)
+        address = resolve_public(p.hostname)
+        conn = http.client.HTTPConnection(p.hostname, 443, timeout=timeout)
+        raw = socket.create_connection((address, 443), timeout=timeout)
+        conn.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=p.hostname)
+        conn.request("GET", urlunsplit(("", "", p.path or "/", p.query, "")),
+                     headers={"User-Agent": user_agent, "Accept-Encoding": "identity"})
+        with conn.getresponse() as result:
+            headers = {k.lower(): v for k, v in result.getheaders()}
+            if int(headers.get("content-length", "0")) > max_bytes:
+                raise FetchError("Response exceeds byte limit")
+            body = result.read(max_bytes + 1)
+            if len(body) > max_bytes:
+                raise FetchError("Response exceeds byte limit")
+            metadata = {"status": result.status, "headers": headers, "observed_at": now()}
+            (directory / "body").write_bytes(body)
     except Exception as exc:
-        pipe.send({"error": str(exc)})
+        metadata = {"error": str(exc)[:4096]}
     finally:
-        pipe.close()
-
-
-def resolve_public(hostname, timeout):
-    context = multiprocessing.get_context("spawn")
-    parent, child = context.Pipe(False)
-    process = context.Process(target=_resolve_worker, args=(child, hostname), daemon=True)
-    process.start()
-    child.close()
-    try:
-        if not parent.poll(timeout):
-            raise FetchError("DNS deadline exceeded")
-        result = parent.recv()
-        if "error" in result:
-            raise FetchError(result["error"])
-        addresses = result["addresses"]
-        if not addresses or any(not ipaddress.ip_address(x).is_global for x in addresses):
-            raise FetchError("Non-public DNS answer")
-        return addresses[0]
-    finally:
-        if process.is_alive():
-            process.terminate()
-        process.join(timeout=1)
-        parent.close()
+        if conn is not None:
+            conn.close()
+        if raw is not None:
+            raw.close()
+    (directory / "result.json").write_text(json.dumps(metadata), encoding="utf-8")
 
 
 def _proxy_request_worker(directory, url, user_agent, timeout, max_bytes):
@@ -83,7 +90,7 @@ def _proxy_request_worker(directory, url, user_agent, timeout, max_bytes):
     (directory / "result.json").write_text(json.dumps(metadata), encoding="utf-8")
 
 
-def _reap_proxy_worker(process):
+def _reap_request_worker(process):
     # Network workers create no descendants. Bound the graceful stop before kill.
     if process.is_alive():
         process.terminate()
@@ -92,7 +99,7 @@ def _reap_proxy_worker(process):
         process.kill()
         process.join(timeout=1)
     if process.is_alive():
-        raise FetchError("Managed proxy worker could not be reaped")
+        raise FetchError("Request worker could not be reaped")
     process.join(timeout=0)
     process.close()
 
@@ -160,19 +167,22 @@ class PublicFetcher:
     def _proxy_wire(self, url):
         if urlsplit(url).hostname not in self.trusted_proxy_hosts or not getproxies().get("https"):
             raise FetchError("Host is not approved for the managed egress proxy")
+        return self._isolated_wire(url, _proxy_request_worker, "Managed proxy")
+
+    def _isolated_wire(self, url, worker, label):
         deadline = time.monotonic() + self.timeout
 
         def remaining():
             value = deadline - time.monotonic()
             if value <= 0:
-                raise FetchError("Managed proxy fetch deadline exceeded")
+                raise FetchError(f"{label} fetch deadline exceeded")
             return value
 
         # A pipe poll only promises some bytes, not a complete message. Wait for
         # worker exit instead, then read bounded files in a private local directory.
-        with tempfile.TemporaryDirectory(prefix="jobrouter-proxy-") as directory:
+        with tempfile.TemporaryDirectory(prefix="jobrouter-request-") as directory:
             context = multiprocessing.get_context("spawn")
-            process = context.Process(target=_proxy_request_worker,
+            process = context.Process(target=worker,
                                       args=(directory, url, self.user_agent, self.timeout, self.max_bytes),
                                       daemon=True)
             try:
@@ -180,15 +190,15 @@ class PublicFetcher:
                 process.start()
                 process.join(timeout=remaining())
                 if process.is_alive():
-                    raise FetchError("Managed proxy fetch deadline exceeded")
+                    raise FetchError(f"{label} fetch deadline exceeded")
                 remaining()
                 if process.exitcode != 0:
-                    raise FetchError("Managed proxy worker failed")
+                    raise FetchError(f"{label} worker failed")
                 try:
                     with open(Path(directory) / "result.json", "rb") as source:
                         raw_metadata = source.read(8_000_001)
                     if len(raw_metadata) > 8_000_000:
-                        raise FetchError("Managed proxy metadata exceeds byte limit")
+                        raise FetchError(f"{label} metadata exceeds byte limit")
                     metadata = json.loads(raw_metadata)
                     remaining()
                     if "error" in metadata:
@@ -199,12 +209,12 @@ class PublicFetcher:
                         raise FetchError("Response exceeds byte limit")
                     response = Response(url, metadata["status"], metadata["headers"], body, metadata["observed_at"])
                 except (OSError, ValueError, KeyError, TypeError) as exc:
-                    raise FetchError("Invalid managed proxy worker result") from exc
+                    raise FetchError(f"Invalid {label.lower()} worker result") from exc
                 remaining()
                 return response
             finally:
                 if process.pid is not None:
-                    _reap_proxy_worker(process)
+                    _reap_request_worker(process)
                 else:
                     process.close()
 
@@ -212,43 +222,7 @@ class PublicFetcher:
         p = urlsplit(url)
         if p.hostname in self.trusted_proxy_hosts:
             return self._proxy_wire(url)
-        deadline = time.monotonic() + self.timeout
-        address = resolve_public(p.hostname, self.timeout)
-        def remaining():
-            value = deadline - time.monotonic()
-            if value <= 0:
-                raise FetchError("Fetch deadline exceeded")
-            return value
-        conn = http.client.HTTPConnection(p.hostname, 443, timeout=self.timeout)
-        # Connect to the already-validated address; retain hostname TLS verification.
-        raw = socket.create_connection((address, 443), timeout=remaining())
-        try:
-            raw.settimeout(remaining())
-            conn.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=p.hostname)
-            conn.sock.settimeout(remaining())
-            conn.request("GET", urlunsplit(("", "", p.path or "/", p.query, "")),
-                         headers={"User-Agent": self.user_agent, "Accept-Encoding": "identity"})
-            conn.sock.settimeout(remaining())
-            result = conn.getresponse()
-            headers = {k.lower(): v for k, v in result.getheaders()}
-            if int(headers.get("content-length", "0")) > self.max_bytes:
-                raise FetchError("Response exceeds byte limit")
-            content = bytearray()
-            while len(content) <= self.max_bytes:
-                if conn.sock:
-                    conn.sock.settimeout(remaining())
-                else:
-                    remaining()
-                chunk = result.read1(min(65536, self.max_bytes + 1 - len(content)))
-                if not chunk:
-                    break
-                content.extend(chunk)
-            if len(content) > self.max_bytes:
-                raise FetchError("Response exceeds byte limit")
-            return Response(url, result.status, headers, bytes(content), now())
-        finally:
-            conn.close()
-            raw.close()
+        return self._isolated_wire(url, _direct_request_worker, "Direct")
 
     def _one(self, url):
         url = canonical_url(url)
