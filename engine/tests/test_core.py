@@ -137,6 +137,53 @@ class CollectionTests(unittest.TestCase):
             self.assertEqual(screen(candidate, Brief("learning", role_families=["learning"])).category, "conditional")
             self.assertEqual(f.used, 4)
 
+    def test_career_anchor_labels_expand_opaque_paths(self):
+        for anchor in ('<a href="/join"><span>Careers</span></a>',
+                       '<a href="/join" aria-label title><script type></script>Careers</a>',
+                       '<a href="/opportunities" aria-label="Open positions"><svg></svg></a>',
+                       '<a href="/team-openings" title="Work with us">Explore</a>'):
+            visited = []
+            def wire(url):
+                visited.append(url)
+                if url.endswith("robots.txt"):
+                    return response(url, "")
+                if url == "https://example.com/":
+                    return response(url, anchor + '<a href="/contact">Contact</a>')
+                return response(url, "")
+            result = discover(["https://example.com/"], PublicFetcher(wire=wire, per_origin_delay=0))
+            self.assertEqual(len(result.sources), 2)
+            self.assertNotIn("https://example.com/contact", visited)
+
+    def test_career_label_does_not_leak_or_allow_unsafe_urls(self):
+        visited = []
+        def wire(url):
+            visited.append(url)
+            if url.endswith("robots.txt"):
+                return response(url, "")
+            if url == "https://example.com/":
+                return response(url, '<a href="/join">Careers</a><a href="/contact">Contact</a><a href="https://127.0.0.1/private">Careers</a><a href="javascript:alert(1)">Jobs</a>')
+            return response(url, "")
+        result = discover(["https://example.com/"], PublicFetcher(wire=wire, per_origin_delay=0))
+        self.assertEqual({s["url"] for s in result.sources}, {"https://example.com/", "https://example.com/join"})
+        self.assertFalse(result.errors)
+
+    def test_link_labels_ignore_script_style_and_obey_depth(self):
+        def wire(url):
+            if url.endswith("robots.txt"):
+                return response(url, "")
+            if url == "https://example.com/":
+                return response(url, '<a href="/not-career"><script>const x="Careers";</script><style>.jobs{}</style>Contact</a><a href="/p/42">JOIN &nbsp; our TEAM</a><a href="/p/42">Careers</a>')
+            return response(url, "")
+        # Use a genuinely opaque non-career path in the script/style example.
+        def checked_wire(url):
+            r = wire(url)
+            r.body = r.body.replace(b"/not-career", b"/contact")
+            return r
+        result = discover(["https://example.com/"], PublicFetcher(wire=checked_wire, per_origin_delay=0))
+        self.assertEqual({s["url"] for s in result.sources}, {"https://example.com/", "https://example.com/p/42"})
+        root_only = discover(["https://example.com/"], PublicFetcher(wire=checked_wire, per_origin_delay=0), depth=0)
+        self.assertEqual(len(root_only.sources), 1)
+
     def test_malformed_not_empty_success(self):
         with self.assertRaises(ValueError):
             normalize(Board("greenhouse", "test", "https://example.com"), response("https://example.com", {"error": "rate limit"}))

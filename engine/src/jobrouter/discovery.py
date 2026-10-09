@@ -18,17 +18,30 @@ class Links(HTMLParser):
         self.scripts = []
         self._json = False
         self._data = []
+        self._anchor = None
+        self._hidden_label = 0
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if tag in ("script", "style"):
+            self._hidden_label += 1
+        if tag == "a":
+            self._anchor = None
         if tag == "a" and a.get("href"):
-            self.links.append(a["href"])
-        if tag == "script" and a.get("type", "").lower() == "application/ld+json":
+            self._anchor = {"href": a["href"], "label": " ".join([a.get("aria-label") or "", a.get("title") or ""])[:2048]}
+            self.links.append(self._anchor)
+        if tag == "script" and (a.get("type") or "").lower() == "application/ld+json":
             self._json = True
             self._data = []
     def handle_data(self, data):
+        if self._anchor is not None and not self._json and not self._hidden_label:
+            self._anchor["label"] = (self._anchor["label"] + " " + data)[:2048]
         if self._json:
             self._data.append(data)
     def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            self._hidden_label = max(0, self._hidden_label - 1)
+        if tag == "a":
+            self._anchor = None
         if tag == "script" and self._json:
             self.scripts.append("".join(self._data))
             self._json = False
@@ -116,10 +129,12 @@ def discover(seeds, fetcher, store=None, max_sources=100, depth=2, workers=6):
                         candidates = []
                         for link in links:
                             try:
-                                candidate = canonical_url(urljoin(url, link))
+                                candidate = canonical_url(urljoin(url, link["href"]))
+                                label = link.get("label", "")
                                 is_board = detect_board(candidate)
                                 # Broad source traversal is explicit and bounded, not a fixed employer list.
-                                if is_board or re.search(r"career|jobs|hiring|portfolio|companies|members|talent", candidate, re.I):
+                                if (is_board or re.search(r"career|jobs|hiring|portfolio|companies|members|talent", candidate, re.I)
+                                        or re.search(r"\b(?:careers?|jobs?|hiring|vacancies|open\s+positions|join\s+(?:our|the)\s+team|work\s+(?:with|for)\s+us)\b", label, re.I)):
                                     candidates.append((candidate, url, level + 1))
                             except (ValueError, KeyError):
                                 continue
