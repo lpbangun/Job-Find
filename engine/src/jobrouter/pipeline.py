@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from .discovery import discover
 from .extraction import extract_facts
 from .matching import screen, apply_review
-from .models import Brief, now
+from .models import Brief, Verdict, now
 from .routing import compile_brief, ModelError
 from .verification import verify_application
 from .identity import deduplicate
@@ -44,10 +44,27 @@ def run_search(prompt, profile, seeds, router, fetcher, store=None, candidate_li
     result.stages.append({"stage": "deduplicate", "status": "completed_with_gaps" if uncertain_reposts else "completed",
                           "excluded": duplicates, "possible_reposts": uncertain_reposts,
                           "history_scope": history.get("scope", "No prior application history supplied")})
-    ordered = sorted(kept, key=lambda x: (-screen(x, brief).score, x.identity))
-    candidates = ordered[:candidate_limit]
-    result.coverage = {"collected": len(ordered), "review_candidates": len(candidates),
-                       "not_reviewed_due_to_limit": max(0, len(ordered) - len(candidates)), "sources": collected.sources}
+    eligible = []
+    for job in kept:
+        decision = screen(job, brief)
+        immutable_failure = any(check.verdict == Verdict.FAIL and not
+                                (check.criterion == "location" and job.arrangement in (None, "unknown"))
+                                for check in decision.checks)
+        if immutable_failure:
+            # An unknown arrangement can still be extracted as remote, making
+            # an office-location mismatch inapplicable. Other known failures
+            # cannot be repaired by overwriting authoritative source facts.
+            result.excluded.append({"job": job.to_dict(), "decision": decision.to_dict(),
+                                    "verification": None})
+        else:
+            eligible.append((job, decision))
+    ordered = sorted(eligible, key=lambda row: (-row[1].score, row[0].identity))
+    candidates = [job for job, _ in ordered[:candidate_limit]]
+    result.stages.append({"stage": "screen_known_facts", "status": "completed",
+                          "excluded": len(result.excluded), "eligible_for_review": len(eligible)})
+    result.coverage = {"collected": len(kept), "excluded_before_review": len(result.excluded),
+                       "review_candidates": len(candidates),
+                       "not_reviewed_due_to_limit": max(0, len(eligible) - len(candidates)), "sources": collected.sources}
 
     def assess(job):
         # Even a rejected/failed extraction preserves the original job for inspection.

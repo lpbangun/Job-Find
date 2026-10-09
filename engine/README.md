@@ -4,7 +4,7 @@ Work in progress, built separately from Jobsss. This is an evidence-first Python
 
 ## Current status (2026-10-09)
 
-- 100 offline regression tests pass, including a fixture-driven complete mission.
+- 106 offline regression tests pass, including a fixture-driven complete mission.
 - Live collection exercised Greenhouse (18 VTS), Lever (39 360Learning) and Workable (6 Hugging Face) using a managed egress proxy. These 63 listings are collection evidence, not 63 relevant recommendations.
 - Two VTS application schemas were checked live, read-only. They are not fresh recommendations for the original user.
 - Ashby API verification stopped at an HTTP 401 robots response; it was not bypassed. Recruitee remains fixture-only.
