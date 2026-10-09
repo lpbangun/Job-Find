@@ -100,18 +100,33 @@ class Brief:
     preferences: list[str] = field(default_factory=list)
 
     def validate(self):
-        if not self.prompt.strip():
+        if not isinstance(self.prompt, str) or not self.prompt.strip():
             raise ValueError("A search prompt is required")
-        if not 1 <= self.count <= 100:
+        if isinstance(self.count, bool) or not isinstance(self.count, int) or not 1 <= self.count <= 100:
             raise ValueError("count must be between 1 and 100")
         for name in ("minimum_base", "minimum_hours", "maximum_experience"):
             value = getattr(self, name)
             if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
                 raise ValueError(f"Invalid {name}")
+        for name in ("role_families", "locations", "arrangements", "employment_types",
+                     "excluded_sectors", "excluded_required_skills", "unresolved", "preferences"):
+            value = getattr(self, name)
+            if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+                raise ValueError(f"{name} must be a list of nonempty strings")
+        if not isinstance(self.requirements, list):
+            raise ValueError("requirements must be a list")
+        if self.profile is not None and not isinstance(self.profile, dict):
+            raise ValueError("profile must be an object or null")
+        if self.country is not None and (not isinstance(self.country, str) or not self.country.strip()):
+            raise ValueError("country must be a nonempty string or null")
+        if not isinstance(self.currency, str) or not self.currency.strip():
+            raise ValueError("currency must be a nonempty string")
+        if not isinstance(self.needs_sponsorship, bool):
+            raise ValueError("needs_sponsorship must be boolean")
         ids = set()
         profile_text = json.dumps(self.profile, ensure_ascii=False, sort_keys=True) if self.profile is not None else ""
         for requirement in self.requirements:
-            if not isinstance(requirement, dict) or not requirement.get("id") or requirement["id"] in ids or not requirement.get("description"):
+            if not isinstance(requirement, dict) or any(not isinstance(requirement.get(key), str) or not requirement[key].strip() for key in ("id", "description", "source_quote")) or requirement["id"] in ids:
                 raise ValueError("Generic requirements need unique identities and descriptions")
             source = self.prompt if requirement.get("source") == "prompt" else profile_text if requirement.get("source") == "profile" else ""
             if not requirement.get("source_quote") or requirement["source_quote"] not in source:

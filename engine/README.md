@@ -4,7 +4,7 @@ Work in progress, built separately from Jobsss. This is an evidence-first Python
 
 ## Current status (2026-10-09)
 
-- 44 offline regression tests pass, including a fixture-driven complete mission.
+- 51 offline regression tests pass, including a fixture-driven complete mission.
 - Live collection exercised Greenhouse (18 VTS), Lever (39 360Learning) and Workable (6 Hugging Face) using a managed egress proxy. These 63 listings are collection evidence, not 63 relevant recommendations.
 - Two VTS application schemas were checked live, read-only. They are not fresh recommendations for the original user.
 - Ashby API verification stopped at an HTTP 401 robots response; it was not bypassed. Recruitee remains fixture-only.
@@ -25,7 +25,7 @@ The CLI `collect` command does not need a model. `rank` without reviewed evidenc
 
 ## Model routing
 
-The hosting agent/runtime supplies `ModelRouter(callback=...)` or an explicitly configured command (argv, no shell). Planner/reviewer route to a stronger tier; extraction to a faster tier. Requested tier and actual reported model are recorded separately. This project does not bundle API keys or assume a particular subscription exposes an API. Missing runtime support is a blocked stage.
+The hosting agent/runtime supplies `ModelRouter(callback=...)` or an explicitly configured command (argv, no shell). Planner/reviewer route to a stronger tier; extraction to a faster tier. Requested tier and actual reported model are recorded separately. This project does not bundle API keys or assume a particular subscription exposes an API. Missing runtime support is a blocked stage. The POSIX command adapter bounds combined stdout/stderr while streaming and terminates the process group at its deadline. In-process callbacks are trusted host code and must enforce their own deadlines; the engine cannot safely interrupt an arbitrary Python callback.
 
 ## Source access
 
@@ -37,4 +37,4 @@ The frontier follows career/ATS/directory leads from input seeds, with configura
 
 SQLite public storage contains source/job evidence, not applicant profiles. The caller owns private prompts/profiles and prior-application history. Relevance reviews bind to the job, brief digest and source digest. Quotes must exist in the retrieved description. Quotation matching is not a guarantee of semantic entailment; independent held-out review remains necessary.
 
-External job descriptions remain their owners' content. Raw live runs and reference clones are excluded from Git. Source references: `lpbangun/oh-shi` and `lpbangun/Job-Find` were inspected; neither is a production dependency. No changes were made to those repositories.
+External job descriptions remain their owners' content. Raw live runs and reference clones are excluded from Git. Source references: `lpbangun/oh-shi` and `lpbangun/Job-Find` were inspected; neither is a production dependency. The existing Job-Find runtime is preserved; this prototype lives in its separate engine directory.
