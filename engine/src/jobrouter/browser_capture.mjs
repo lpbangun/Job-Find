@@ -2,8 +2,7 @@
 import './browser_process_group.mjs';
 import readline from 'node:readline';
 import {randomUUID} from 'node:crypto';
-import {createRequire} from 'node:module';
-import {pathToFileURL} from 'node:url';
+import {loadChromium} from './browser_module.mjs';
 const lines = readline.createInterface({input: process.stdin});
 const pending = new Map();
 let resolveConfig;
@@ -56,8 +55,7 @@ const captureDOM = () => {
 let browser;
 try {
   const config = await configPromise;
-  const moduleURL = config.playwright_module.startsWith('file:') ? config.playwright_module : pathToFileURL(createRequire(import.meta.url).resolve(config.playwright_module)).href;
-  const {chromium} = await import(moduleURL);
+  const chromium = await loadChromium(config.playwright_module);
   const deadline = Date.now() + config.timeout * 1000;
   const closedNotice = new RegExp(config.closed_pattern, 'i');
   const remaining = () => Math.max(1, deadline - Date.now());
