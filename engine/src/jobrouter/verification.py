@@ -160,7 +160,7 @@ def _verified_form(parser, job, page_url):
     return None
 
 
-def verify_application(job, fetcher):
+def verify_application(job, fetcher, browser_provider=None):
     if POOLS.search(job.title):
         job.availability = "lead"
         return {"job_id": job.identity, "status": "lead", "reason": "Evergreen/speculative pool is not a verified vacancy"}
@@ -205,13 +205,18 @@ def verify_application(job, fetcher):
             # Visible posting identity plus enabled, job-bound controls in one form.
             marker = _verified_form(parser, job, response.url)
             if not job.title or job.title.casefold() not in text.casefold() or marker is None:
+                if browser_provider is not None:
+                    from .browser_verification import BrowserApplicationVerifier
+                    if type(browser_provider) is not BrowserApplicationVerifier:
+                        raise ValueError("Rendered verification requires the deployment-owned browser provider")
+                    return browser_provider.verify(job)
                 raise ValueError("Job-specific enabled application form and exact job binding not established")
             job.apply_url = response.url
             job.evidence.append(Evidence.from_text(response.url, response.text, marker, "application_form", response.observed_at))
         job.availability = "open"
         job.observed_at = response.observed_at
         return {"job_id": job.identity, "status": "open", "checked_at": job.observed_at,
-                "apply_url": job.apply_url, "method": "read_only_application_schema" if job.provider == "greenhouse" else "read_only_form"}
+                "apply_url": job.apply_url, "submission_tested": False, "method": "read_only_application_schema" if job.provider == "greenhouse" else "read_only_form"}
     except Exception as exc:
         job.availability = "unverified"
         return {"job_id": job.identity, "status": "unverified", "checked_at": now(), "reason": str(exc)}

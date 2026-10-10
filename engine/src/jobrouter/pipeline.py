@@ -24,7 +24,7 @@ class SearchResult:
 
 
 def run_search(prompt, profile, seeds, router, fetcher, store=None, candidate_limit=60,
-               source_limit=100, workers=4, depth=2, compiled_brief=None, history=None):
+               source_limit=100, workers=4, depth=2, compiled_brief=None, history=None, browser_provider=None):
     """Host model and transport dependencies are injected, never silently substituted."""
     if not 1 <= candidate_limit <= 1000:
         raise ValueError("Invalid candidate limit")
@@ -86,7 +86,7 @@ def run_search(prompt, profile, seeds, router, fetcher, store=None, candidate_li
         review = dict(review_response["output"], model=review_response["actual_model"])
         decision = apply_review(decision, job, review, brief)
         if decision.category != "excluded":
-            verification = verify_application(job, fetcher)
+            verification = verify_application(job, fetcher, browser_provider=browser_provider)
             decision = apply_review(screen(job, brief), job, review, brief)
         else:
             verification = None
@@ -111,7 +111,13 @@ def run_search(prompt, profile, seeds, router, fetcher, store=None, candidate_li
                 getattr(result, decision.category).append({"job": job.to_dict(), "decision": decision.to_dict(), "error": str(exc)})
     for group in (result.qualified, result.conditional, result.excluded):
         group.sort(key=lambda x: (-x["decision"]["score"], x["job"]["provider"], x["job"]["external_id"]))
-    result.coverage.update({"request_attempts": fetcher.used, "model_calls": len(router.receipts),
+    browser_receipts = [row["verification"] for group in (result.qualified, result.conditional, result.excluded)
+                        for row in group if (row.get("verification") or {}).get("method") == "rendered_open_path"]
+    browser_requests = sum(len(receipt.get("fetch_receipts", [])) for receipt in browser_receipts)
+    result.coverage.update({"request_attempts": fetcher.used + browser_requests,
+                            "browser_request_attempts_observed": browser_requests,
+                            "request_attempts_complete": all(receipt.get("accounting_complete", True) for receipt in browser_receipts),
+                            "model_calls": len(router.receipts),
                             "requested_results": brief.count, "qualified_results": len(result.qualified),
                             "shortfall": max(0, brief.count - len(result.qualified))})
     result.stages.append({"stage": "assess_and_verify", "status": "completed_with_gaps" if result.errors else "completed"})

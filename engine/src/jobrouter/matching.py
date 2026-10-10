@@ -78,10 +78,16 @@ def screen(job: Job, brief: Brief) -> Decision:
 
     current_application = False
     for evidence in job.evidence:
-        if evidence.field not in ("application_schema", "application_form"):
+        if evidence.field not in ("application_schema", "application_form", "rendered_application_form"):
             continue
         try:
-            age = datetime.now(timezone.utc) - datetime.fromisoformat(evidence.observed_at.replace("Z", "+00:00"))
+            current = datetime.now(timezone.utc)
+            if evidence.expires_at is not None and current >= datetime.fromisoformat(evidence.expires_at.replace("Z", "+00:00")):
+                continue
+            # Rendered observations need the provider's short explicit expiry.
+            if evidence.field == "rendered_application_form" and evidence.expires_at is None:
+                continue
+            age = current - datetime.fromisoformat(evidence.observed_at.replace("Z", "+00:00"))
             if timedelta(0) <= age <= timedelta(hours=24):
                 current_application = True
         except (ValueError, TypeError):

@@ -4,7 +4,7 @@ Work in progress, built separately from Jobsss. This is an evidence-first Python
 
 ## Current status (2026-10-09)
 
-- 106 offline regression tests pass, including a fixture-driven complete mission.
+- Offline regressions include a fixture-driven complete mission and an optional rendered verification provider. Browser runtime fixtures are opt-in and not counted as passed when skipped; see `docs/RENDERED-VERIFICATION.md`.
 - Live collection exercised Greenhouse (18 VTS), Lever (39 360Learning) and Workable (6 Hugging Face) using a managed egress proxy. These 63 listings are collection evidence, not 63 relevant recommendations.
 - Two VTS application schemas were checked live, read-only. They are not fresh recommendations for the original user.
 - Ashby API verification stopped at an HTTP 401 robots response; it was not bypassed. Recruitee remains fixture-only.
@@ -35,6 +35,6 @@ The frontier follows career/ATS/directory leads from input seeds, including care
 
 ## Evidence and privacy
 
-SQLite public storage contains source/job evidence, not applicant profiles. The caller owns private prompts/profiles and prior-application history. Relevance reviews bind to the job, brief digest and source digest. Quotes must exist in the retrieved description. Extraction cannot silently overwrite known ATS facts, and relevance reviews must bind to the current description digest. Static HTML application checks require enabled controls in one job-bound form; ambiguous and JavaScript-only forms remain unverified. Quotation matching is not a guarantee of semantic entailment; independent held-out review remains necessary.
+SQLite public storage contains source/job evidence, not applicant profiles. The caller owns private prompts/profiles and prior-application history. Relevance reviews bind to the job, brief digest and source digest. Quotes must exist in the retrieved description. Extraction cannot silently overwrite known ATS facts, and relevance reviews must bind to the current description digest. Static HTML application checks require enabled controls in one job-bound form. The optional deployment-owned Node/Playwright provider can inspect rendered open paths without submitting; ambiguous, inaccessible or unsupported forms remain unverified. See `docs/RENDERED-VERIFICATION.md` for runtime requirements and verification limits. Quotation matching is not a guarantee of semantic entailment; independent held-out review remains necessary.
 
 External job descriptions remain their owners' content. Raw live runs and reference clones are excluded from Git. Source references: `lpbangun/oh-shi` and `lpbangun/Job-Find` were inspected; neither is a production dependency. The existing Job-Find runtime is preserved; this prototype lives in its separate engine directory.

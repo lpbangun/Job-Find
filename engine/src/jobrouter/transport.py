@@ -281,7 +281,7 @@ class PublicFetcher:
             if parser is None or not parser.allows(url):
                 raise FetchError("Robots disallows path or permission is unresolved")
 
-    def get(self, url):
+    def get(self, url, follow_redirects=True):
         seen = set()
         for _ in range(5):
             url = canonical_url(url)
@@ -291,6 +291,8 @@ class PublicFetcher:
             self._allowed(url)
             r = self._one(url)
             if r.status in (301, 302, 303, 307, 308):
+                if not follow_redirects:
+                    raise FetchError("Redirects disabled for this request")
                 if not r.headers.get("location"):
                     raise FetchError("Redirect missing Location")
                 url = urljoin(url, r.headers["location"])

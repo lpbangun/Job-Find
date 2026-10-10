@@ -24,6 +24,7 @@ class Evidence:
     quote: str
     field: str
     digest: str
+    expires_at: str | None = None
 
     @classmethod
     def from_text(cls, url, text, quote, field, observed_at=None):
