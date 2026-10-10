@@ -142,11 +142,12 @@ class Response:
 
 
 class PublicFetcher:
-    def __init__(self, budget=200, per_origin_delay=0.5, timeout=20, max_bytes=3_000_000, wire=None, trusted_proxy_hosts=()):
+    def __init__(self, budget=200, per_origin_delay=0.5, timeout=20, max_bytes=3_000_000, wire=None, trusted_proxy_hosts=(), shared_budget=None):
         if (budget < 1 or isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                 or not math.isfinite(timeout) or timeout <= 0 or max_bytes < 1 or per_origin_delay < 0):
             raise ValueError("Invalid fetch limits")
         self.budget = budget
+        self.shared_budget = shared_budget
         self.delay = per_origin_delay
         self.timeout = timeout
         self.max_bytes = max_bytes
@@ -238,6 +239,8 @@ class PublicFetcher:
             with self._lock:
                 if self.used >= self.budget:
                     raise FetchError("Request budget exhausted")
+                if self.shared_budget is not None:
+                    self.shared_budget.reserve({"http_attempts": 1}, "public_fetch")
                 self.used += 1
                 sequence = self.used
             start = now()

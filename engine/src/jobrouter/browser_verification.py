@@ -170,15 +170,22 @@ def _classify_snapshot(snap, target):
 
 
 class BrowserApplicationVerifier:
-    def __init__(self, policy):
+    def __init__(self, policy, shared_budget=None):
         if type(policy) is not BrowserPolicy:
             raise TypeError('BrowserPolicy is deployment configuration')
         self.policy = policy
+        self.shared_budget = shared_budget
         self._slots = threading.BoundedSemaphore(policy.max_parallel)
         self.receipts = []
         self._lock = threading.Lock()
 
     def _capture(self, target, timeout, nonce, fixture_html=None):
+        # Reserve the worker's full HTTP allowance before spawning. The private
+        # child retains its existing per-request limit; no cross-process ledger
+        # sharing or post-hoc request accounting is needed to cap dispatch.
+        # Never refund unused slots: interrupted accounting may be incomplete.
+        if self.shared_budget is not None:
+            self.shared_budget.reserve({"http_attempts": self.policy.request_budget}, "browser_capture")
         request = {'target': target, 'timeout': timeout, 'nonce': nonce, 'closed_pattern': CLOSED.pattern,
                    'allowed_hosts': self.policy.allowed_hosts,
                    'trusted_proxy_hosts': self.policy.trusted_proxy_hosts,

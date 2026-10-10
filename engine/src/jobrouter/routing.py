@@ -107,10 +107,11 @@ def _run_host(command, encoded, timeout, byte_limit):
 
 
 class ModelRouter:
-    def __init__(self, command=None, policy=None, callback=None):
+    def __init__(self, command=None, policy=None, callback=None, shared_budget=None):
         self.command = command
         self.policy = policy or ModelPolicy()
         self.callback = callback
+        self.shared_budget = shared_budget
         self.receipts = []
         self._lock = threading.Lock()
         self._slots = threading.BoundedSemaphore(self.policy.max_parallel)
@@ -130,6 +131,8 @@ class ModelRouter:
             with self._lock:
                 if self._calls >= self.policy.max_calls:
                     raise ModelError("Model call budget exhausted")
+                if self.shared_budget is not None:
+                    self.shared_budget.reserve({"model_calls": 1}, "model_" + task)
                 self._calls += 1
             started = time.monotonic()
             receipt = {"request_id": request_id, "task": task, "requested_model": requested_model, "started_at": now()}

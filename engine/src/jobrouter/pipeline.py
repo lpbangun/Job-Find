@@ -28,6 +28,11 @@ def run_search(prompt, profile, seeds, router, fetcher, store=None, candidate_li
     """Host model and transport dependencies are injected, never silently substituted."""
     if not 1 <= candidate_limit <= 1000:
         raise ValueError("Invalid candidate limit")
+    components = [router, fetcher] + ([browser_provider] if browser_provider is not None else [])
+    budgets = [getattr(component, "shared_budget", None) for component in components]
+    shared_budget = next((budget for budget in budgets if budget is not None), None)
+    if shared_budget is not None and any(budget is not shared_budget for budget in budgets):
+        raise ValueError("All mission components must use the same shared budget")
     brief = compiled_brief or compile_brief(prompt, profile, router)[0]
     brief.validate()
     if brief.prompt != prompt or brief.profile != profile:
@@ -68,6 +73,8 @@ def run_search(prompt, profile, seeds, router, fetcher, store=None, candidate_li
 
     def assess(job):
         # Even a rejected/failed extraction preserves the original job for inspection.
+        if shared_budget is not None:
+            shared_budget.reserve({"candidates": 1}, "candidate_review")
         job, extractor_model = extract_facts(job, router)
         decision = screen(job, brief)
         if decision.category == "excluded":

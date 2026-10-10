@@ -5,7 +5,11 @@ def evaluate(cases, relevant_by_case, required_count=10, precision_floor=.9):
     if required_count < 1 or not 0 <= precision_floor <= 1:
         raise ValueError("Invalid evaluation thresholds")
     rows = []
-    for case_id, results in cases.items():
+    # Include the complete supplied reference roster: a failed/omitted run is
+    # an empty result, not permission to remove a difficult brief from metrics.
+    # Keep unjudged submitted cases too; absent truth cannot make them pass.
+    for case_id in dict.fromkeys([*cases, *relevant_by_case]):
+        results = cases.get(case_id, [])
         truth = set(relevant_by_case.get(case_id, []))
         # Duplicates remain wasted ranking slots; never remove them and promote rank 11.
         returned = list(results)[:required_count]
