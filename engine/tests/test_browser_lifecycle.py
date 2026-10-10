@@ -14,6 +14,48 @@ from jobrouter.routing import _run_host, ModelError
 import jobrouter
 
 
+def process_snapshot(path):
+    """Read one Linux process identity atomically with respect to disappearance.
+
+    ENOENT/ESRCH mean it stopped. Permission, malformed data and other I/O errors
+    must surface instead of manufacturing successful cleanup evidence.
+    """
+    try:
+        fields = path.read_text().rsplit(') ', 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    return fields[0], fields[19]
+
+
+def same_process_running(path, started):
+    snapshot = process_snapshot(path)
+    return snapshot is not None and snapshot[1] == started and snapshot[0] != 'Z'
+
+
+class ProcessSnapshotTests(unittest.TestCase):
+    def test_disappearance_during_read_is_stopped(self):
+        for error in (FileNotFoundError(), ProcessLookupError()):
+            with self.subTest(error=type(error).__name__), patch.object(Path, 'read_text', side_effect=error):
+                self.assertFalse(same_process_running(Path('/fixture/stat'), '100'))
+
+    def test_permission_and_unexpected_io_errors_surface(self):
+        for error in (PermissionError(), OSError('unexpected I/O failure')):
+            with self.subTest(error=type(error).__name__), patch.object(Path, 'read_text', side_effect=error):
+                with self.assertRaises(type(error)):
+                    same_process_running(Path('/fixture/stat'), '100')
+
+    def test_identity_reuse_zombie_and_live_states(self):
+        for state, started, expected in (('S','100',True),('Z','100',False),('S','101',False)):
+            fields = [state]+['0']*18+[started]
+            with self.subTest(state=state,started=started), patch.object(Path, 'read_text', return_value='42 (name with ) spaces) '+' '.join(fields)):
+                self.assertEqual(same_process_running(Path('/fixture/stat'),'100'),expected)
+
+    def test_malformed_stat_is_not_successful_cleanup(self):
+        with patch.object(Path, 'read_text', return_value='malformed'):
+            with self.assertRaises(IndexError):
+                same_process_running(Path('/fixture/stat'),'100')
+
+
 @unittest.skipUnless(os.name == 'posix' and shutil.which('node'), 'POSIX Node lifecycle fixture')
 class BrowserLifecycleTests(unittest.TestCase):
     def exercise_cleanup(self, startup_delay=0):
@@ -43,6 +85,13 @@ class BrowserLifecycleTests(unittest.TestCase):
                         self.fail('Fixture readiness was not published within its bounded startup window')
                     time.sleep(.01)
                 data = json.loads(pidfile.read_text())
+                stat = Path('/proc') / str(data['pid']) / 'stat'
+                linux_proc = Path('/proc').is_dir()
+                started = None
+                if linux_proc:
+                    snapshot = process_snapshot(stat)
+                    self.assertIsNotNone(snapshot, 'Ready child must exist before timeout')
+                    started = snapshot[1]
                 # Adopt the already-started real process solely to test timeout
                 # cleanup after readiness. Production launch/deadline behavior is
                 # unchanged and remains covered by the command-runner tests.
@@ -55,10 +104,9 @@ class BrowserLifecycleTests(unittest.TestCase):
                 self.assertEqual(data['owner'], proc.pid)
                 # Assertions precede teardown: teardown must not mask failed
                 # runner cleanup. A killed orphan may await init as a zombie.
-                stat = Path('/proc') / str(data['pid']) / 'stat'
                 def running():
-                    if stat.exists() and stat.read_text().split(') ')[1][0] == 'Z':
-                        return False
+                    if linux_proc:
+                        return same_process_running(stat, started)
                     try:
                         os.kill(data['pid'], 0)
                     except ProcessLookupError:
