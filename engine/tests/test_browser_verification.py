@@ -32,7 +32,7 @@ def fixture_capture(target, nonce='test-nonce'):
     return dict(nonce=nonce, provider='node-playwright-chromium', source_kind='live',
         browser_version='unit-fixture-not-a-live-browser', session_id='unit-fixture-session',
         started_at=now(), observed_at=now(), target=target, rendered_html=raw,
-        rendered_sha256=hashlib.sha256(raw.encode()).hexdigest(), problems=[],
+        rendered_sha256=hashlib.sha256(raw.encode()).hexdigest(), problems=[], accounting_complete=True,
         fetch_receipts=[dict(url=target['application_url'], status=200, sha256=hashlib.sha256(raw.encode()).hexdigest())],
         snapshot=dict(url=target['application_url'], text='Example Software Engineer Submit application',
             document_title='Example Software Engineer', challenge=False, overflow=False, unsupported_frames=False,
@@ -208,13 +208,15 @@ class BrowserVerificationTests(unittest.TestCase):
             Path(request['progress_path']).write_text(json.dumps({
                 'fetch_receipts':[{'url':self.target['application_url'],'status':200}],
                 'resource_receipts':[{'url':'https://jobs.lever.co/slow.js','status':'pending'}],
-                'accounting_complete':False}))
+                'accounting_complete':False, 'stage':'resource_fetch', 'renderer_stage':'dom_readiness'}))
             raise RuntimeError('Capture interrupted')
         with patch('jobrouter.browser_verification._run_host',interrupted): result=provider.verify(self.job)
         self.assertEqual(result['status'],'unverified')
         self.assertEqual(len(result['fetch_receipts']),1)
         self.assertFalse(result['accounting_complete'])
         self.assertEqual(result['resource_receipts'][0]['status'],'pending')
+        self.assertEqual(result['stage'],'resource_fetch')
+        self.assertEqual(result['renderer_stage'],'dom_readiness')
 
     def test_expired_posting_and_speculative_pool_do_not_launch_browser(self):
         provider=BrowserApplicationVerifier(self.policy)
@@ -224,3 +226,15 @@ class BrowserVerificationTests(unittest.TestCase):
             self.job.deadline=None; self.job.title='General Application'
             self.assertEqual(provider.verify(self.job)['status'],'lead')
             capture.assert_not_called()
+
+    def test_incomplete_accounting_cannot_establish_open_path(self):
+        value=fixture_capture(self.target)
+        value['accounting_complete']=False
+        with self.assertRaisesRegex(ValueError,'accounting is incomplete'):
+            _evaluate(value,self.target,'test-nonce',self.policy)
+
+    def test_browser_side_failure_vetoes_otherwise_valid_form(self):
+        value=fixture_capture(self.target)
+        value['problems']=[{'reason_code':'browser_request_failed','resource_type':'script'}]
+        with self.assertRaisesRegex(ValueError,'blocked resource'):
+            _evaluate(value,self.target,'test-nonce',self.policy)

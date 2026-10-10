@@ -50,6 +50,12 @@ class BrowserRuntimeTests(unittest.TestCase):
         snap=self.capture('<h1>Software Engineer</h1><p>This job is closed.</p>')
         self.assertEqual(_classify_snapshot(snap,_target(fixture_job(),self.provider.policy))[0],'closed')
 
+    def test_late_challenge_during_readiness_is_not_missed(self):
+        snap=self.capture('<h1>Software Engineer</h1><form><input name="name"><input name="email" type="email"><button>Submit application</button></form><script>setTimeout(()=>{const c=document.createElement("div");c.id="captcha-container";c.textContent="Verify you are human";document.body.append(c)},200)</script>')
+        self.assertTrue(snap['challenge'])
+        with self.assertRaisesRegex(ValueError,'challenge'):
+            _classify_snapshot(snap,_target(fixture_job(),self.provider.policy))
+
     @unittest.skipUnless(os.name == 'posix' and os.path.isdir('/proc'), 'Linux process-group inspection')
     def test_real_chromium_is_stopped_after_supervisor_timeout(self):
         """Withhold a broker reply after actual Chromium starts, then time out.
@@ -90,9 +96,18 @@ class BrowserRuntimeTests(unittest.TestCase):
                       'target': _target(fixture_job(), self.provider.policy)}
             proc.stdin.write((json.dumps(config)+'\n').encode())
             proc.stdin.flush()
-            ready, _, _ = select.select([proc.stdout], [], [], 20)
-            self.assertTrue(ready, 'Renderer did not reach bounded startup readiness')
-            message = json.loads(proc.stdout.readline())
+            startup_deadline = time.monotonic() + 20
+            while True:
+                ready, _, _ = select.select([proc.stdout], [], [], max(0, startup_deadline-time.monotonic()))
+                self.assertTrue(ready, 'Renderer did not reach bounded startup readiness')
+                line = bytearray()
+                while not line.endswith(b'\n'):
+                    part = os.read(proc.stdout.fileno(), 1)
+                    self.assertTrue(part, 'Renderer exited during startup')
+                    line.extend(part)
+                message = json.loads(line)
+                if message.get('kind') != 'stage':
+                    break
             self.assertEqual(message.get('kind'), 'request', message)
             self.assertEqual(message.get('resource_type'), 'document', message)
             self.assertEqual(message.get('url'), config['target']['application_url'])

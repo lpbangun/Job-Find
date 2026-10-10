@@ -103,6 +103,8 @@ def _evaluate(capture, target, nonce, policy):
     snap = capture['snapshot']
     if canonical_url(snap['url']) != target['application_url']:
         raise ValueError('Browser navigated away from the exact application target')
+    if capture.get('accounting_complete') is not True:
+        raise ValueError('Browser request accounting is incomplete')
     if capture['problems'] or snap['overflow']:
         raise ValueError('Incomplete browser capture or blocked resource')
     if not any(r.get('url') == target['application_url'] and r.get('status') == 200 and r.get('sha256')
@@ -200,8 +202,8 @@ class BrowserApplicationVerifier:
                     raw = source.read(2_000_001)
                 if len(raw) <= 2_000_000:
                     progress = json.loads(raw)
-                    for key in ('fetch_receipts', 'resource_receipts', 'accounting_complete'):
-                        result.setdefault(key, progress.get(key, [] if key.endswith('receipts') else False))
+                    for key in ('fetch_receipts', 'resource_receipts', 'accounting_complete', 'stage', 'renderer_stage', 'browser_problems'):
+                        result.setdefault(key, progress.get(key, [] if key.endswith('receipts') or key == 'browser_problems' else (False if key == 'accounting_complete' else 'unknown')))
             return result
 
     def verify(self, job):
@@ -233,9 +235,11 @@ class BrowserApplicationVerifier:
                 raise ValueError('Browser deadline exceeded')
             receipt['accounting_complete'] = False
             capture = self._capture(target, remaining, nonce)
-            receipt.update(fetch_receipts=capture.get('fetch_receipts', []),
+            receipt.update(browser_problems=capture.get('browser_problems', []),
+                           fetch_receipts=capture.get('fetch_receipts', []),
                            resource_receipts=capture.get('resource_receipts', []),
-                           accounting_complete=capture.get('accounting_complete', False))
+                           accounting_complete=capture.get('accounting_complete', False),
+                           stage=capture.get('stage', 'unknown'), renderer_stage=capture.get('renderer_stage', 'unknown'))
             status, reason = _evaluate(capture, target, nonce, self.policy)
             if time.monotonic() >= deadline:
                 raise ValueError('Browser deadline exceeded')

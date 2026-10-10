@@ -63,3 +63,12 @@ JOBROUTER_BROWSER_TESTS=1 PYTHONPATH=src python -m unittest discover -s tests -p
 Optional environment settings: `JOBROUTER_NODE`, `JOBROUTER_PLAYWRIGHT_MODULE`, `JOBROUTER_CHROMIUM`.
 
 At implementation time, sandboxed Chromium launch in the cloud shell failed with `socket() failed: Operation not permitted`. That restriction was not bypassed or retried through another browser route. The rendered fixtures are therefore explicitly skipped there. Authorized local QA of published `eae7a5` (tree `742b068f`) passed all four real rendering fixtures and all 166 tests without skips using Node 22.22.3, Playwright Core 1.62.1, Chromium 153 and Python 3.12.3. Normal cleanup left no browser processes or zombies. That QA exposed a CommonJS absolute `index.js` import incompatibility; the minimal named/default-export repair has offline Node regression coverage. The new genuine Chromium timeout fixture and the repaired CommonJS configuration still await authorized local runtime QA. No new live verification or relevance score is claimed.
+
+
+## Readiness and diagnostic limits
+
+The renderer observes DOM readiness after `domcontentloaded` instead of waiting for global `networkidle`. A candidate form, closure or challenge snapshot must remain unchanged for 500 ms while every observed request and broker reply has settled. The total deadline still bounds the worker. A stability window is a bounded observation, not a guarantee against arbitrary future page changes.
+
+Every failed/blocked resource still makes verification unverified. No analytics, upload, account or CAPTCHA endpoint has an optional-resource exemption. Resource receipts now distinguish method denial, host denial and request-budget exhaustion, retain method/type and renderer stage, and record timing. The progress journal reports whether interruption happened while fetching a resource or waiting on the renderer, with the latest renderer stage. A renderer error cannot claim complete accounting because more requests may be queued.
+
+Saved live development receipts for Filevine, GitLab and Mozilla remain unverified: challenge/blocked unknown dependencies in the first two, and a timeout with incomplete accounting in the third. This change neither upgrades those captures nor establishes current availability. Authorized local QA must rerun the reviewed rendering fixtures, including the late-challenge and actual timeout cases, before new live validation.
